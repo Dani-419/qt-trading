@@ -1,92 +1,129 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { CycleDef, SearchResult, SearchParams, fetchCycles, searchCycles } from './api/client'
-import FilterPanel from './components/FilterPanel'
-import ResultsTable from './components/ResultsTable'
-import DayChartModal from './components/DayChartModal'
+import { useState, useEffect, useCallback } from 'react';
+import FilterPanel from './components/FilterPanel';
+import ResultsTable from './components/ResultsTable';
+import DayChartModal from './components/DayChartModal';
+import {
+  fetchAssets,
+  fetchCycles,
+  searchCycles,
+  fetchDayData,
+  type Cycle,
+  type SearchResult,
+  type DayData,
+  type SearchParams,
+} from './api/client';
 
 export default function App() {
-  const [cycles, setCycles] = useState<CycleDef[]>([])
-  const [asset, setAsset] = useState('NQ')
-  const [cycleId, setCycleId] = useState(11)
-  const [cycleBias, setCycleBias] = useState('')
-  const [dailyBias, setDailyBias] = useState('')
-  const [biasLogic, setBiasLogic] = useState('and')
-  const [wTo, setWTo] = useState('')
-  const [dTo, setDTo] = useState('')
-  const [sTo, setSTo] = useState('')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
-  const [results, setResults] = useState<SearchResult[]>([])
-  const [loading, setLoading] = useState(false)
-  const [selectedDate, setSelectedDate] = useState<string | null>(null)
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>()
-
-  useEffect(() => { fetchCycles().then(setCycles) }, [])
-
-  const doSearch = useCallback(() => {
-    if (!cycleId) return
-    setLoading(true)
-    const params: SearchParams = { asset, cycle_id: cycleId, bias_logic: biasLogic }
-    if (cycleBias) params.cycle_bias = cycleBias
-    if (dailyBias) params.daily_bias = dailyBias
-    if (wTo) params.w_to = wTo
-    if (dTo) params.d_to = dTo
-    if (sTo) params.s_to = sTo
-    if (dateFrom) params.date_from = dateFrom
-    if (dateTo) params.date_to = dateTo
-    searchCycles(params).then(r => { setResults(r); setLoading(false) })
-  }, [asset, cycleId, cycleBias, dailyBias, biasLogic, wTo, dTo, sTo, dateFrom, dateTo])
+  const [assets, setAssets] = useState<string[]>([]);
+  const [cycles, setCycles] = useState<Cycle[]>([]);
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [dayData, setDayData] = useState<DayData | null>(null);
+  const [selectedCycleId, setSelectedCycleId] = useState<number | undefined>(undefined);
+  const [selectedAsset, setSelectedAsset] = useState<string>('NQ');
 
   useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(doSearch, 300)
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
-  }, [doSearch])
+    const loadData = async () => {
+      try {
+        const [assetsData, cyclesData] = await Promise.all([
+          fetchAssets(),
+          fetchCycles(),
+        ]);
+        setAssets(assetsData);
+        setCycles(cyclesData);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load data');
+      }
+    };
+    loadData();
+  }, []);
+
+  const handleSearch = useCallback(async (params: SearchParams) => {
+    setLoading(true);
+    setError(null);
+    setSelectedCycleId(params.cycle_id);
+    setSelectedAsset(params.asset);
+    try {
+      const searchResults = await searchCycles(params);
+      setResults(searchResults);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Search failed');
+      setResults([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const handleRowClick = useCallback(async (date: string) => {
+    setSelectedDate(date);
+    setDayData(null);
+    try {
+      const data = await fetchDayData(selectedAsset, date);
+      setDayData(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load chart data');
+    }
+  }, [selectedAsset]);
+
+  const handleCloseModal = useCallback(() => {
+    setSelectedDate(null);
+    setDayData(null);
+  }, []);
 
   return (
-    <div style={{ maxWidth: 1400, margin: '0 auto', padding: '16px 20px' }}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, borderBottom: '1px solid var(--border)', paddingBottom: 12 }}>
-        <h1 style={{ fontSize: 20, fontWeight: 600 }}>ICT Cycle Matcher</h1>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span style={{ color: 'var(--text2)', fontSize: 13 }}>Asset:</span>
-          {['NQ', 'ES', 'YM'].map(a => (
-            <button key={a} onClick={() => setAsset(a)}
-              style={{ background: a === asset ? 'var(--accent)' : 'var(--bg3)', color: a === asset ? '#fff' : 'var(--text)', border: 'none', padding: '5px 14px', borderRadius: 4, fontWeight: 600 }}>
-              {a}
-            </button>
-          ))}
-        </div>
-      </header>
+    <div className="min-h-screen bg-gray-900 text-white">
+      <div className="container mx-auto px-4 py-6">
+        <header className="mb-6">
+          <h1 className="text-3xl font-bold text-white">
+            ICT Quarterly Cycles Dashboard
+          </h1>
+          <p className="text-gray-400 mt-1">
+            Historical 90-minute cycle analysis for NQ, ES, YM futures
+          </p>
+        </header>
 
-      <FilterPanel
-        cycles={cycles} cycleId={cycleId} setCycleId={setCycleId}
-        cycleBias={cycleBias} setCycleBias={setCycleBias}
-        dailyBias={dailyBias} setDailyBias={setDailyBias}
-        biasLogic={biasLogic} setBiasLogic={setBiasLogic}
-        wTo={wTo} setWTo={setWTo} dTo={dTo} setDTo={setDTo} sTo={sTo} setSTo={setSTo}
-        dateFrom={dateFrom} setDateFrom={setDateFrom} dateTo={dateTo} setDateTo={setDateTo}
-      />
+        {error && (
+          <div className="bg-red-900 border border-red-700 text-red-100 px-4 py-3 rounded mb-4">
+            {error}
+          </div>
+        )}
 
-      <div style={{ margin: '12px 0 8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ color: 'var(--text2)', fontSize: 13 }}>
-          {loading ? 'Searching...' : `${results.length} matches`}
-        </span>
-        {results.length > 0 && (
-          <button onClick={() => {
-            const hdr = 'Date,Cycle Bias,Daily Bias,W-TO,D-TO,S-TO,Day %,Direction\n'
-            const csv = results.map(r => `${r.trading_date},${r.cycle_bias},${r.daily_bias},${r.w_to_pos||''},${r.d_to_pos||''},${r.s_to_pos||''},${r.day_pct},${r.day_direction}`).join('\n')
-            const blob = new Blob([hdr + csv], { type: 'text/csv' })
-            const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'ict_results.csv'; a.click()
-          }} style={{ fontSize: 12, padding: '4px 10px' }}>Export CSV</button>
+        {assets.length > 0 && cycles.length > 0 && (
+          <FilterPanel
+            assets={assets}
+            cycles={cycles}
+            onSearch={handleSearch}
+          />
+        )}
+
+        {loading && (
+          <div className="bg-gray-800 rounded-lg p-8 text-center text-gray-400">
+            Searching...
+          </div>
+        )}
+
+        {!loading && (
+          <ResultsTable
+            results={results}
+            cycles={cycles}
+            onRowClick={handleRowClick}
+          />
         )}
       </div>
 
-      <ResultsTable results={results} onRowClick={setSelectedDate} />
-
       {selectedDate && (
-        <DayChartModal asset={asset} date={selectedDate} highlightCycleId={cycleId}
-          onClose={() => setSelectedDate(null)} />
+        <DayChartModal
+          asset={selectedAsset}
+          date={selectedDate}
+          dayData={dayData}
+          selectedCycleId={selectedCycleId}
+          onClose={handleCloseModal}
+          showCycles={true}
+          showTrueOpens={true}
+        />
       )}
     </div>
-  )
+  );
 }
