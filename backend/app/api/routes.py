@@ -1,40 +1,23 @@
 """API route handlers."""
+import os
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter
 from pydantic import BaseModel
-import pandas as pd
 
 from ..core.cycles import CYCLES
-from ..core.loader import load_csv
-from ..core.trading_day import assign_trading_day, assign_cycle
 
 router = APIRouter()
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DB_PATH = PROJECT_ROOT / "data" / "ict_cycles.db"
-RAW_DIR = PROJECT_ROOT / "data" / "raw"
-
-# Cache loaded DataFrames
-_df_cache = {}
+DB_PATH = Path(os.environ.get("DB_PATH", str(PROJECT_ROOT / "data" / "ict_cycles.db")))
 
 def get_db():
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     return conn
-
-def get_asset_df(asset: str) -> pd.DataFrame:
-    if asset not in _df_cache:
-        fpath = RAW_DIR / f"{asset}_1m.csv"
-        if not fpath.exists():
-            return pd.DataFrame()
-        df = load_csv(fpath)
-        df = assign_trading_day(df)
-        df = assign_cycle(df)
-        df["td_str"] = df["trading_date"].astype(str)
-        _df_cache[asset] = df
-    return _df_cache[asset]
 
 
 class SearchRequest(BaseModel):
@@ -57,11 +40,16 @@ def get_assets():
 
 @router.get("/cycles")
 def get_cycles():
-    return [
-        {"cycle_id": c.cycle_id, "session": c.session, "phase": c.phase,
-         "start_time": f"{c.start_hour:02d}:{c.start_minute:02d}", "label": c.label}
-        for c in CYCLES
-    ]
+    result = []
+    for i, c in enumerate(CYCLES):
+        nxt = CYCLES[i + 1] if i + 1 < len(CYCLES) else CYCLES[0]
+        result.append({
+            "cycle_id": c.cycle_id, "session": c.session, "phase": c.phase,
+            "start_hour": c.start_hour, "start_min": c.start_minute,
+            "end_hour": nxt.start_hour, "end_min": nxt.start_minute,
+            "label": c.label,
+        })
+    return result
 
 
 @router.post("/search")
@@ -133,18 +121,28 @@ def get_day(asset: str, date: str):
         (asset, date),
     ).fetchall()
 
+    # Candles from DB candles table
+    candle_rows = conn.execute(
+        "SELECT timestamp, open, high, low, close, cycle_id "
+        "FROM candles WHERE asset=? AND trading_date=? ORDER BY timestamp",
+        (asset, date),
+    ).fetchall()
     conn.close()
 
-    # Candles from CSV (cached in memory) — return as bars with Unix time
-    df = get_asset_df(asset)
-    day_df = df[df["td_str"] == date].sort_values("timestamp")
     bars = []
-    for _, r in day_df.iterrows():
+    for cr in candle_rows:
+        crd = dict(cr)
+        # timestamp is ISO string — convert to Unix seconds
+        try:
+            ts = datetime.fromisoformat(crd["timestamp"].replace("Z", "+00:00"))
+            t = int(ts.timestamp())
+        except Exception:
+            t = 0
         bars.append({
-            "time": int(r["timestamp"].timestamp()),
-            "open": r["open"], "high": r["high"],
-            "low": r["low"], "close": r["close"],
-            "cycle_id": int(r["cycle_id"]),
+            "time": t,
+            "open": crd["open"], "high": crd["high"],
+            "low": crd["low"], "close": crd["close"],
+            "cycle_id": crd["cycle_id"],
         })
 
     # Build cycles array in frontend-expected format

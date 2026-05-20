@@ -1,9 +1,9 @@
 [build]
-  base      = "frontend"
-  command   = "npm ci && npm run build"
-  publish   = "dist"
+  base    = "frontend"
+  command = "npm ci && npm run build"
+  publish = "dist"
 
-# SPA fallback - all routes serve index.html
+# SPA fallback — all client-side routes serve index.html
 [[redirects]]
   from   = "/*"
   to     = "/index.html"
